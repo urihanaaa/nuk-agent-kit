@@ -74,10 +74,10 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    Skill Inventory: {memload: true/false, memsave: true/false, codex_plan_review: true/false, codex_impl_review: true/false, ...}
    ```
 5. **Set degradation flags** (xem Failure Handling Matrix):
-   - Codex not found → `degrade_codex: true` (reviews will be self-review only)
+   - Codex not found → `degrade_codex: true` — **cascade:** also set `degrade_codex_plan_review: true`, `degrade_codex_impl_review: true`, `degrade_codex_security_review: true`, `degrade_codex_think_about: true` (CLI missing = all Codex-dependent skills unavailable)
    - Dirty worktree policy (depends on mode):
      - **New run (`/dev-cycle <US>`):** PAUSE — "Uncommitted changes detected. Please commit or stash before starting dev-cycle."
-     - **Resume (`/dev-cycle continue`):** Check if changes belong to active plan's files. If yes → WARN + continue. If unrelated changes → PAUSE — "Uncommitted changes detected that are NOT part of the active plan. Please commit or stash unrelated changes."
+     - **Resume (`/dev-cycle continue`):** Dirty-worktree check is DEFERRED to Cross-Session Resume (after active plan is identified — see below).
    - Tests fail (pre-existing) → WARN + continue
 
 6. **If `/dev-cycle continue`:** Jump to Cross-Session Resume flow (see below).
@@ -110,8 +110,9 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 4. **Define chunks** using manifest schema (see `references/chunk-manifest.md`):
    - Each chunk = independently implementable + reviewable unit
    - Define verification command per chunk
-5. **Optional — Architecture debate:** If uncertainty detected, suggest:
+5. **Optional — Architecture debate:** If uncertainty detected AND `degrade_codex_think_about: false`, suggest:
    > "Would you like to run `/codex-think-about` to debate the architecture approach?"
+   If degraded → skip suggestion, decide approach internally.
 6. **Plan review:** If `degrade_codex_plan_review: false` → gọi `/codex-plan-review` (Skill tool). If degraded → self-review: re-read plan with fresh eyes, check for consistency/gaps.
    - Triage Codex issues: FIX / REBUT
    - Apply fixes to plan
@@ -122,7 +123,7 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    dev_cycle:
      story: "<US title>"
      plan_status: locked
-     current_stage: 1
+     current_stage: 2
      current_chunk: 1
      model_overrides: []
      escalations: []
@@ -133,8 +134,9 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
          unresolved_issues: []
    ---
    ```
+   > **Note:** `current_stage` is set to `2` (not `1`) because plan is already locked — next action is implementation. This ensures resume jumps to the correct stage.
 
-**Exit:** Plan file locked with chunk manifests.
+**Exit:** Plan file locked with chunk manifests, `current_stage: 2`.
 
 ---
 
@@ -151,7 +153,8 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    - Fail → auto-retry 1x → if still fails, PAUSE + ask user
 5. **Security scan:** Pattern match against sensitive patterns:
    - SQL queries, user input handling, auth/crypto code, secrets/env vars
-   - If match found → suggest: "Security-sensitive code detected. Run `/codex-security-review`?"
+   - If match found AND `degrade_codex_security_review: false` → suggest: "Security-sensitive code detected. Run `/codex-security-review`?"
+   - If degraded → WARN: "Security-sensitive patterns detected. Manual review recommended (Codex security review unavailable)."
 6. **Escalation triggers → PAUSE + require Opus:**
    - Codex flags "architectural concern" during any review
    - Sonnet detects "approach uncertainty" (e.g., conflicting requirements, unclear API behavior)
@@ -231,10 +234,14 @@ When `/dev-cycle continue` is invoked:
 
 ### Resume:
 1. Read plan file YAML header → extract `current_stage`, `current_chunk`
-2. Rebuild TodoWrite state from plan data
-3. Re-verify stage entry conditions (e.g., git clean, tools available)
-4. Jump to current stage + chunk
-5. If `chunks[N].status: reviewing` but no active Codex thread → restart review from round 1
+2. **Dirty-worktree check (resume-specific):** Now that the target plan is known:
+   - Get plan's chunk file lists → compare with `git diff --name-only`
+   - If all changed files belong to active plan → WARN + continue
+   - If unrelated changes detected → PAUSE: "Uncommitted changes detected that are NOT part of the active plan. Please commit or stash unrelated changes."
+3. Rebuild TodoWrite state from plan data
+4. Re-verify stage entry conditions (tools available, etc.)
+5. Jump to current stage + chunk
+6. If `chunks[N].status: reviewing` but no active Codex thread → restart review from round 1
 
 ### Reconciliation rules:
 - **Plan file = SSOT.** TodoWrite = display only (rebuild from plan state)
@@ -250,7 +257,7 @@ When `/dev-cycle continue` is invoked:
 | Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. Reviews will use self-review only (no Codex)." | DEGRADE: set `degrade_codex: true`, skip codex-plan-review + codex-impl-review | Continue without Codex |
 | External skill missing | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
 | Dirty worktree (new run) | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
-| Dirty worktree (resume) | Stage 0 | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
+| Dirty worktree (resume) | Cross-Session Resume (after plan identified) | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
 | Tests fail (pre-existing) | Stage 0 | "⚠️ Existing tests are failing. Proceeding with caution." | WARN + continue | — |
 | Tests fail (new code) | Stage 2 verify | "Verification failed: `{cmd}` → `{output}`" | PAUSE: auto-retry 1x → ask user if still failing | Fix code → re-run Stage 2 verification |
 | Codex review timeout | Stage 1/3 poll | "Codex timed out after {N}s." | DEGRADE: use partial results if review.md exists, else skip review | Continue with warning |
