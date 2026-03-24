@@ -36,8 +36,8 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 |-------|-------------|----------|--------------|
 | 0 Preflight | Any | — | Log model in plan header |
 | 1 Plan | 🔒 Opus | `--force-sonnet`: user must confirm "I accept reduced planning quality" | `OVERRIDE:force-sonnet:stage1` in plan header |
-| 2 Implement | Sonnet (default) | Escalation → PAUSE + ask user to switch to Opus | `ESCALATION:opus-required:stage2:{reason}` in chunk section |
-| 3 Review/Fix | Sonnet + Codex | Same escalation as Stage 2 | `ESCALATION:opus-required:stage3:{reason}` in chunk section |
+| 2 Implement | Sonnet (default) | Escalation → PAUSE + ask user to switch to Opus | `ESCALATION:opus-required:stage2:{reason}` in YAML header `escalations` array |
+| 3 Review/Fix | Sonnet + Codex | Same escalation as Stage 2 | `ESCALATION:opus-required:stage3:{reason}` in YAML header `escalations` array |
 | 4 Finalize (multi-chunk) | 🔒 Opus | Same as Stage 1: `--force-sonnet` + explicit confirm | `OVERRIDE:force-sonnet:stage4` in plan header |
 | 4 Finalize (single-chunk) | Any | — | — |
 
@@ -57,16 +57,30 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    git_clean: git status --porcelain (empty = clean)
    tests_pass: run project test command if defined
    ```
-3. **Build inventory object:**
+3. **Skill inventory:** Check external skill availability (see `references/external-skills.md`):
+   ```
+   memload: check if /memload skill is loadable
+   memsave: check if /memsave skill is loadable
+   codex_plan_review: check if /codex-plan-review skill is loadable
+   codex_impl_review: check if /codex-impl-review skill is loadable
+   codex_security_review: check if /codex-security-review skill is loadable
+   codex_think_about: check if /codex-think-about skill is loadable
+   ```
+   - For each missing REQUIRED skill → WARN (see `external-skills.md` Fallback column)
+   - For each missing OPTIONAL skill → set degradation flag (e.g., `degrade_codex_plan_review: true`)
+4. **Build inventory object:**
    ```
    Tool Inventory: {codex: true/false, git_clean: true/false, tests_pass: true/false/unknown}
+   Skill Inventory: {memload: true/false, memsave: true/false, codex_plan_review: true/false, codex_impl_review: true/false, ...}
    ```
-4. **Set degradation flags** (xem Failure Handling Matrix):
+5. **Set degradation flags** (xem Failure Handling Matrix):
    - Codex not found → `degrade_codex: true` (reviews will be self-review only)
-   - Dirty worktree → PAUSE: "Uncommitted changes detected. Please commit or stash before starting dev-cycle."
+   - Dirty worktree policy (depends on mode):
+     - **New run (`/dev-cycle <US>`):** PAUSE — "Uncommitted changes detected. Please commit or stash before starting dev-cycle."
+     - **Resume (`/dev-cycle continue`):** Check if changes belong to active plan's files. If yes → WARN + continue. If unrelated changes → PAUSE — "Uncommitted changes detected that are NOT part of the active plan. Please commit or stash unrelated changes."
    - Tests fail (pre-existing) → WARN + continue
 
-5. **If `/dev-cycle continue`:** Jump to Cross-Session Resume flow (see below).
+6. **If `/dev-cycle continue`:** Jump to Cross-Session Resume flow (see below).
 
 **Exit:** Context loaded, tools verified, degradation flags set.
 
@@ -87,14 +101,18 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 1. **Analyze User Story:** Break down requirements, identify scope, assess complexity
 2. **Fast path check:** If trivial US (≤1 file, clear implementation, no architectural decisions):
    - Suggest: "This looks like a simple change. Skip detailed planning and go straight to implementation with 1 chunk?"
-   - If user confirms → create single implicit chunk → go to Stage 2
+   - If user confirms:
+     1. Create plan file (same format as step 8) with single chunk + `plan_status: locked`
+     2. Set `current_stage: 2` in YAML header
+     3. → go to Stage 2
+   - **Note:** Fast path skips steps 3-7 but MUST still create the plan file (SSOT for resume + state tracking).
 3. **Design approach:** Architecture decisions, file impact, risk assessment
 4. **Define chunks** using manifest schema (see `references/chunk-manifest.md`):
    - Each chunk = independently implementable + reviewable unit
    - Define verification command per chunk
 5. **Optional — Architecture debate:** If uncertainty detected, suggest:
    > "Would you like to run `/codex-think-about` to debate the architecture approach?"
-6. **Plan review:** Gọi `/codex-plan-review` (Skill tool)
+6. **Plan review:** If `degrade_codex_plan_review: false` → gọi `/codex-plan-review` (Skill tool). If degraded → self-review: re-read plan with fresh eyes, check for consistency/gaps.
    - Triage Codex issues: FIX / REBUT
    - Apply fixes to plan
 7. **User confirmation:** Present final plan → user confirms → set `plan_status: locked`
@@ -125,7 +143,7 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 **Entry:** Plan locked, current chunk manifest exists, prev chunk approved (if any).
 
 ### Actions:
-1. **Update state:** Set `chunks[N].status: implementing` in plan file
+1. **Update state:** Set `current_stage: 2` + `chunks[N].status: implementing` in plan file YAML header
 2. **Implement:** Code + docstrings + inline comments in 1 pass
 3. **Write tests:** Unit/integration tests for the chunk
 4. **Run verification:** Execute verification command from chunk manifest
@@ -148,8 +166,8 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 **Entry:** Stage 2 verification pass.
 
 ### Actions:
-1. **Update state:** Set `chunks[N].status: reviewing` in plan file
-2. **Invoke review:** Gọi `/codex-impl-review` (Skill tool)
+1. **Update state:** Set `current_stage: 3` + `chunks[N].status: reviewing` in plan file YAML header
+2. **Invoke review:** If `degrade_codex_impl_review: false` → gọi `/codex-impl-review` (Skill tool). If degraded → self-review: re-read diff, list issues manually.
 3. **Triage each issue:**
    - **FIX:** Apply fix immediately
    - **REBUT:** Explain why the issue is invalid, provide evidence
@@ -168,7 +186,7 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 
 **Exit:** Chunk approved, state saved.
 
-**Next:** If more chunks → update `current_chunk` → back to Stage 2. If last chunk → Stage 4.
+**Next:** If more chunks → update `current_chunk` + `current_stage: 2` → back to Stage 2. If last chunk → set `current_stage: 4` → Stage 4.
 
 ---
 
@@ -230,7 +248,9 @@ When `/dev-cycle continue` is invoked:
 |---------|----------------|--------------|--------|-------------|
 | Opus unavailable | Stage 1/4 entry | "Opus required for {stage}. Switch with `/model opus`, or use `--force-sonnet` to override." | PAUSE | User switches model or uses override |
 | Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. Reviews will use self-review only (no Codex)." | DEGRADE: set `degrade_codex: true`, skip codex-plan-review + codex-impl-review | Continue without Codex |
-| Dirty worktree | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
+| External skill missing | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
+| Dirty worktree (new run) | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
+| Dirty worktree (resume) | Stage 0 | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
 | Tests fail (pre-existing) | Stage 0 | "⚠️ Existing tests are failing. Proceeding with caution." | WARN + continue | — |
 | Tests fail (new code) | Stage 2 verify | "Verification failed: `{cmd}` → `{output}`" | PAUSE: auto-retry 1x → ask user if still failing | Fix code → re-run Stage 2 verification |
 | Codex review timeout | Stage 1/3 poll | "Codex timed out after {N}s." | DEGRADE: use partial results if review.md exists, else skip review | Continue with warning |
