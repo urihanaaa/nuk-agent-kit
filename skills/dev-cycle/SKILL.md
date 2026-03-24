@@ -255,7 +255,8 @@ When `/dev-cycle continue` is invoked:
 |---------|----------------|--------------|--------|-------------|
 | Opus unavailable | Stage 1/4 entry | "Opus required for {stage}. Switch with `/model opus`, or use `--force-sonnet` to override." | PAUSE | User switches model or uses override |
 | Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. All Codex-dependent capabilities disabled." | DEGRADE: set `degrade_codex: true` → cascade to all per-skill flags (`degrade_codex_plan_review`, `degrade_codex_impl_review`, `degrade_codex_security_review`, `degrade_codex_think_about`) | Continue without Codex |
-| External skill missing | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
+| Required skill missing (`/memload`, `/memsave`) | Stage 0 | "⚠️ Skill `{name}` not found. Continuing without it." | WARN only (no degradation flag). For `/memsave`: flag `memsave_failed: true` if needed later | Continue without context/save |
+| Optional skill missing (`/codex-*`) | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
 | Dirty worktree (new run) | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
 | Dirty worktree (resume) | Cross-Session Resume (after plan identified) | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
 | Tests fail (pre-existing) | Stage 0 | "⚠️ Existing tests are failing. Proceeding with caution." | WARN + continue | — |
