@@ -227,8 +227,8 @@ When `/dev-cycle continue` is invoked:
 2. **1 match:** Resume automatically
 3. **>1 match:** List candidates → ask user to choose:
    > Found multiple active dev-cycle plans:
-   > 1. dev-cycle-add-auth-20260325.md (Stage 2, Chunk 2/3)
-   > 2. dev-cycle-fix-api-20260324.md (Stage 1, planning)
+   > 1. dev-cycle-add-auth-20260325.md (Stage 3, Chunk 2/3 reviewing)
+   > 2. dev-cycle-fix-api-20260324.md (Stage 2, Chunk 1/1 implementing)
    > Which one to resume?
 4. **0 match:** ABORT — "No active dev-cycle plan found. Start a new one with `/dev-cycle <US>`."
 
@@ -254,7 +254,7 @@ When `/dev-cycle continue` is invoked:
 | Failure | Detection Point | User Message | Action | Resume Path |
 |---------|----------------|--------------|--------|-------------|
 | Opus unavailable | Stage 1/4 entry | "Opus required for {stage}. Switch with `/model opus`, or use `--force-sonnet` to override." | PAUSE | User switches model or uses override |
-| Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. Reviews will use self-review only (no Codex)." | DEGRADE: set `degrade_codex: true`, skip codex-plan-review + codex-impl-review | Continue without Codex |
+| Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. All Codex-dependent capabilities disabled." | DEGRADE: set `degrade_codex: true` → cascade to all per-skill flags (`degrade_codex_plan_review`, `degrade_codex_impl_review`, `degrade_codex_security_review`, `degrade_codex_think_about`) | Continue without Codex |
 | External skill missing | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
 | Dirty worktree (new run) | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
 | Dirty worktree (resume) | Cross-Session Resume (after plan identified) | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
