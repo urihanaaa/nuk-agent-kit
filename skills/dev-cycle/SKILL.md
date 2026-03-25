@@ -145,22 +145,48 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 **Entry:** Plan locked, current chunk manifest exists, prev chunk approved (if any).
 
 ### Actions:
-1. **Update state:** Set `current_stage: 2` + `chunks[N].status: implementing` in plan file YAML header
-2. **Implement:** Code + docstrings + inline comments in 1 pass
-3. **Write tests:** Unit/integration tests for the chunk
-4. **Run verification:** Execute verification command from chunk manifest
+1. **Update state:** Set `current_stage: 2` + `chunks[N].status: implementing` in plan file YAML header. Also capture **baseline diff snapshot**: record `git diff --name-only` + `git diff --cached --name-only` as `chunks[N].baseline_files` in YAML header (used by scope drift check in step 8 to distinguish pre-existing residue from new edits).
+2. **Scope boundary reminder:** Output chunk scope to conversation + TodoWrite before coding:
+   > 📋 **Chunk {N} scope:**
+   > - **Goal:** {chunk.Goal}
+   > - **Files:** {chunk.Files list}
+   > - **Non-goals:** {chunk.Non-goals}
+   > - ⚠️ New files outside this list will be flagged by the filename-level scope drift check (step 8).
+3. **Implement:** Code + docstrings + inline comments in 1 pass
+4. **Write tests:** Unit/integration tests for the chunk
+5. **Run verification:** Execute verification command from chunk manifest
    - Pass → continue
    - Fail → auto-retry 1x → if still fails, PAUSE + ask user
-5. **Security scan:** Pattern match against sensitive patterns:
+6. **Security scan:** Pattern match against sensitive patterns:
    - SQL queries, user input handling, auth/crypto code, secrets/env vars
    - If match found AND `degrade_codex_security_review: false` → suggest: "Security-sensitive code detected. Run `/codex-security-review`?"
    - If degraded → WARN: "Security-sensitive patterns detected. Manual review recommended (Codex security review unavailable)."
-6. **Escalation triggers → PAUSE + require Opus:**
+7. **Escalation triggers → PAUSE + require Opus:**
    - Codex flags "architectural concern" during any review
    - Sonnet detects "approach uncertainty" (e.g., conflicting requirements, unclear API behavior)
    - User request
+8. **Scope drift check** (automated — objective enforcement, không dựa vào self-discipline):
+   - Collect **expected files** = union of:
+     - Current chunk manifest `Files` list (files this chunk is ALLOWED to modify)
+     - Plan file itself (`docs/plans/dev-cycle-*.md`) — always expected in diff (state mutations)
+   - Collect **known residue** = files from all previously approved chunks (chunks where `status: approved`). These appear in `git diff` but are NOT modifiable by current chunk.
+   - Run: `git diff --name-only` + `git diff --cached --name-only` (union staged + unstaged)
+   - For each file in diff:
+     - File ∈ expected files → ✅ OK (current chunk scope)
+     - File ∈ known residue → check if file has NEW changes since chunk N started. Heuristic: if file was NOT in `git diff` at Stage 2 entry but IS in diff now → **SCOPE DRIFT** (current chunk modified an approved file without declaring it). If file was already in diff before → ✅ OK (pre-existing residue, not new edits).
+     - File ∉ expected files AND ∉ known residue → **SCOPE DRIFT**
+   - **Baseline capture:** At Stage 2 step 1, record `git diff --name-only` + `git diff --cached --name-only` as `baseline_files` in plan YAML header for current chunk. Use this to distinguish pre-existing vs new changes.
+   - **Known limitation:** Baseline is filename-only, not content-aware. If an approved chunk file was already dirty at chunk start AND the current chunk adds new edits to the same file, the drift check treats it as pre-existing residue (false negative). This is accepted as rare in practice (chunks typically touch disjoint files) and avoids the complexity of per-file blob snapshots.
+   - If drift detected → PAUSE:
+     > ⚠️ **Scope drift:** Files changed outside expected scope:
+     > - `{file_path}` (not in current or approved chunk manifests)
+     >
+     > Options:
+     > 1. **Revert** these changes (recommended if truly out of scope)
+     > 2. **Add to manifest** (if legitimately needed — update current chunk Files list + document reason in plan)
+   - If no drift → continue to Stage 3 silently
 
-**Exit:** Chunk code + docs + tests pass + verification pass.
+**Exit:** Chunk code + docs + tests pass + verification pass + scope checked (best-effort, filename-level).
 
 ---
 
@@ -170,7 +196,26 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 
 ### Actions:
 1. **Update state:** Set `current_stage: 3` + `chunks[N].status: reviewing` in plan file YAML header
-2. **Invoke review:** If `degrade_codex_impl_review: false` → gọi `/codex-impl-review` (Skill tool). If degraded → self-review: re-read diff, list issues manually.
+2. **Invoke review:** If `degrade_codex_impl_review: false` → gọi `/codex-impl-review` (Skill tool) with **scope-aware SESSION_CONTEXT** injected from chunk manifest:
+   ```
+   Constraints: Changes SHOULD only touch files in scope (best-effort at filename granularity).
+     Current chunk files (modifiable): {chunk.Files list}
+     Plan file (expected mutations): {plan file path}
+     Known residue (approved chunks, read-only): {list of Files from approved chunks}
+     Non-goals: {chunk.Non-goals}
+   Assumptions: File outside all listed scope = scope violation (ISSUE).
+     Logic implementing non-goals items = scope creep (ISSUE).
+     Known residue files appear in diff from prior chunks — only flag if NEW changes
+     were introduced by THIS chunk (compare against baseline_files snapshot).
+     Note: scope enforcement is filename-level. Edits to already-dirty approved files
+     may not be detected (see SKILL.md known limitation).
+   Tech stack: {infer from codebase}
+   Acceptance criteria:
+     1. No regressions, no new bugs, maintainable code (code quality)
+     2. No new files outside current chunk scope + plan file (scope compliance — filename-level)
+     3. No logic implementing non-goals items (scope compliance)
+   ```
+   If degraded → self-review: re-read diff, check scope compliance + code quality manually.
 3. **Triage each issue:**
    - **FIX:** Apply fix immediately
    - **REBUT:** Explain why the issue is invalid, provide evidence
@@ -234,9 +279,12 @@ When `/dev-cycle continue` is invoked:
 
 ### Resume:
 1. Read plan file YAML header → extract `current_stage`, `current_chunk`
-2. **Dirty-worktree check (resume-specific):** Now that the target plan is known:
-   - Get plan's chunk file lists → compare with `git diff --name-only`
-   - If all changed files belong to active plan → WARN + continue
+2. **Dirty-worktree check (resume-specific):** Now that the target plan is known, use the **same scope model as Stage 2/3**:
+   - Collect **plan-owned files** = union of:
+     - All chunk `Files` lists (all chunks, regardless of status)
+     - Plan file itself (`docs/plans/dev-cycle-*.md`)
+   - Run: `git diff --name-only` + `git diff --cached --name-only` (union staged + unstaged)
+   - If all changed files ∈ plan-owned files → WARN + continue
    - If unrelated changes detected → PAUSE: "Uncommitted changes detected that are NOT part of the active plan. Please commit or stash unrelated changes."
 3. Rebuild TodoWrite state from plan data
 4. Re-verify stage entry conditions (tools available, etc.)

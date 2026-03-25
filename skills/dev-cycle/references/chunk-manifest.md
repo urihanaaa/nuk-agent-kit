@@ -20,6 +20,7 @@ Reference schema cho dev-cycle chunk contracts. Mỗi chunk trong plan file ph�
 - **Status:** pending | implementing | reviewing | approved
 - **Review round:** N (current review iteration, starts at 0)
 - **Unresolved issues:** [] (list of ISSUE-N IDs from current review round)
+- **Baseline files:** [] (list of filenames in `git diff` at Stage 2 entry — populated lazily when chunk starts implementing. Used by scope drift check to distinguish pre-existing residue from new edits.)
 ```
 
 ## Field Mapping — Manifest vs Plan YAML Header
@@ -32,6 +33,7 @@ Chunk state tồn tại ở 2 nơi. Bảng dưới xác định authority:
 | Status | ✅ Quick reference | ✅ Canonical | **YAML Header** |
 | Review round | ✅ Quick reference | ✅ Canonical | **YAML Header** |
 | Unresolved issues | ✅ Quick reference | ✅ Canonical | **YAML Header** |
+| Baseline files | ❌ | ✅ Canonical | **YAML Header** (populated at Stage 2 entry) |
 | Model overrides, escalations | ❌ | ✅ | **YAML Header** |
 
 > **Rule:** Khi conflict → YAML header luôn wins. Manifest runtime fields là convenience copy, được update cùng lúc nhưng không phải SSOT.
