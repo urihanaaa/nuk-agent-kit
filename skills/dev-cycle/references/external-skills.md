@@ -2,13 +2,6 @@
 
 `/dev-cycle` gọi các skills bên ngoài qua `/skill` invocation (loose coupling). Các skills này phải được install riêng — KHÔNG bundled trong nuk-agent-kit.
 
-## Required Skills
-
-| Skill | Purpose | Expected Install Path | Fallback if Missing |
-|-------|---------|----------------------|---------------------|
-| `/memload` | Load 4-layer memory context | `.claude/skills/memload/` | WARN: skip memory load, continue without context |
-| `/memsave` | Save session + daily memory | `.claude/skills/memsave/` | WARN: manual save needed. Flag `memsave_failed` |
-
 ## Optional Skills (Codex Integration)
 
 | Skill | Purpose | Expected Install Path | Fallback if Missing |
@@ -27,9 +20,7 @@
 
 ## Installation
 
-Các skills trên đến từ 2 repos:
-- **nuk-memory-kit:** `/memload`, `/memsave`
-- **codex-review skill pack:** `/codex-plan-review`, `/codex-impl-review`, `/codex-security-review`, `/codex-think-about`
+Các skills trên đến từ **codex-review skill pack:** `/codex-plan-review`, `/codex-impl-review`, `/codex-security-review`, `/codex-think-about`
 
 Xem README.md ở root repo để biết cách install/symlink.
 

@@ -22,11 +22,11 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 
 | Stage | Entry Conditions | Allowed Skip | Outputs | Next Stage |
 |-------|-----------------|--------------|---------|------------|
-| 0 Preflight | `/dev-cycle` invoked | Never | Context loaded, tool inventory, degradation flags | → 1 (or resume target if `continue`) |
+| 0 Preflight | `/dev-cycle` invoked | Never | Tool inventory, degradation flags | → 1 (or resume target if `continue`) |
 | 1 Plan | Stage 0 done, Opus active (or `--force-sonnet`) | Fast path: AI detects trivial US + user confirms → single implicit chunk → Stage 2 | Locked plan file with chunk manifests | → 2 (first chunk) |
 | 2 Implement | Plan locked, current chunk manifest exists, prev chunk approved (if any) | Never | Chunk code + docs + tests pass + verification pass | → 3 |
-| 3 Review/Fix | Stage 2 verification pass | Never | Chunk APPROVED + triage resolved + auto-memsave done | → 2 (next chunk) or → 4 (last chunk) |
-| 4 Finalize | All chunks approved | Opus skip: 1-chunk → Sonnet finalize | Full memsave, suggested commit, US complete | Done |
+| 3 Review/Fix | Stage 2 verification pass | Never | Chunk APPROVED + triage resolved | → 2 (next chunk) or → 4 (last chunk) |
+| 4 Finalize | All chunks approved | Opus skip: 1-chunk → Sonnet finalize | Suggested commit, US complete | Done |
 
 ## Opus Model Policy (Single Authority)
 
@@ -50,17 +50,14 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
 **Entry:** User invokes `/dev-cycle`.
 
 ### Actions:
-1. **Load memory:** Gọi `/memload` (Skill tool). Nếu fail → WARN, continue.
-2. **Tool inventory:** Check availability:
+1. **Tool inventory:** Check availability:
    ```
    codex: command -v codex || npx @openai/codex --version
    git_clean: git status --porcelain (empty = clean)
    tests_pass: run project test command if defined
    ```
-3. **Skill inventory:** Check external skill availability (see `references/external-skills.md`):
+2. **Skill inventory:** Check external skill availability (see `references/external-skills.md`):
    ```
-   memload: check if /memload skill is loadable
-   memsave: check if /memsave skill is loadable
    codex_plan_review: check if /codex-plan-review skill is loadable
    codex_impl_review: check if /codex-impl-review skill is loadable
    codex_security_review: check if /codex-security-review skill is loadable
@@ -68,21 +65,21 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    ```
    - For each missing REQUIRED skill → WARN (see `external-skills.md` Fallback column)
    - For each missing OPTIONAL skill → set degradation flag (e.g., `degrade_codex_plan_review: true`)
-4. **Build inventory object:**
+3. **Build inventory object:**
    ```
    Tool Inventory: {codex: true/false, git_clean: true/false, tests_pass: true/false/unknown}
-   Skill Inventory: {memload: true/false, memsave: true/false, codex_plan_review: true/false, codex_impl_review: true/false, ...}
+   Skill Inventory: {codex_plan_review: true/false, codex_impl_review: true/false, codex_security_review: true/false, codex_think_about: true/false}
    ```
-5. **Set degradation flags** (xem Failure Handling Matrix):
+4. **Set degradation flags** (xem Failure Handling Matrix):
    - Codex not found → `degrade_codex: true` — **cascade:** also set `degrade_codex_plan_review: true`, `degrade_codex_impl_review: true`, `degrade_codex_security_review: true`, `degrade_codex_think_about: true` (CLI missing = all Codex-dependent skills unavailable)
    - Dirty worktree policy (depends on mode):
      - **New run (`/dev-cycle <US>`):** PAUSE — "Uncommitted changes detected. Please commit or stash before starting dev-cycle."
      - **Resume (`/dev-cycle continue`):** Dirty-worktree check is DEFERRED to Cross-Session Resume (after active plan is identified — see below).
    - Tests fail (pre-existing) → WARN + continue
 
-6. **If `/dev-cycle continue`:** Jump to Cross-Session Resume flow (see below).
+5. **If `/dev-cycle continue`:** Jump to Cross-Session Resume flow (see below).
 
-**Exit:** Context loaded, tools verified, degradation flags set.
+**Exit:** Tools verified, degradation flags set.
 
 ---
 
@@ -229,10 +226,8 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    - Critical security findings
 6. **On APPROVE:**
    - Set `chunks[N].status: approved`
-   - Run `/memsave` automatically (capture chunk completion)
-   - If memsave fails → WARN, flag `memsave_failed: true`, continue
 
-**Exit:** Chunk approved, state saved.
+**Exit:** Chunk approved, state updated in plan file.
 
 **Next:** If more chunks → update `current_chunk` + `current_stage: 2` → back to Stage 2. If last chunk → set `current_stage: 4` → Stage 4.
 
@@ -251,15 +246,14 @@ Nếu không có argument → ask user: "Describe the User Story you want to imp
    - Check cross-chunk consistency
    - Verify no orphan imports/references
    - Ensure tests cover integration points
-2. **Final memsave:** Gọi `/memsave` with full US summary
-3. **Suggest commit:**
+2. **Suggest commit:**
    > Suggested commit message:
    > `feat: <US summary>`
    >
    > Commit? (y/n/edit)
-4. **Mark complete:** Set `plan_status: completed` in plan file
+3. **Mark complete:** Set `plan_status: completed` in plan file
 
-**Exit:** US complete, memory saved.
+**Exit:** US complete.
 
 ---
 
@@ -293,7 +287,6 @@ When `/dev-cycle continue` is invoked:
 
 ### Reconciliation rules:
 - **Plan file = SSOT.** TodoWrite = display only (rebuild from plan state)
-- memsave timestamp > plan timestamp → WARN: "Memory may be ahead of plan state — review before continuing"
 
 ---
 
@@ -303,14 +296,12 @@ When `/dev-cycle continue` is invoked:
 |---------|----------------|--------------|--------|-------------|
 | Opus unavailable | Stage 1/4 entry | "Opus required for {stage}. Switch with `/model opus`, or use `--force-sonnet` to override." | PAUSE | User switches model or uses override |
 | Codex CLI not found | Stage 0 | "⚠️ Codex CLI not found. All Codex-dependent capabilities disabled." | DEGRADE: set `degrade_codex: true` → cascade to all per-skill flags (`degrade_codex_plan_review`, `degrade_codex_impl_review`, `degrade_codex_security_review`, `degrade_codex_think_about`) | Continue without Codex |
-| Required skill missing (`/memload`, `/memsave`) | Stage 0 | "⚠️ Skill `{name}` not found. Continuing without it." | WARN only (no degradation flag). For `/memsave`: flag `memsave_failed: true` if needed later | Continue without context/save |
 | Optional skill missing (`/codex-*`) | Stage 0 | "⚠️ Skill `{name}` not found. Using fallback." | DEGRADE: set `degrade_{skill}: true`, use fallback per `external-skills.md` | Continue degraded |
 | Dirty worktree (new run) | Stage 0 | "Uncommitted changes detected. Please commit or stash before starting." | PAUSE | User resolves → re-run `/dev-cycle` |
 | Dirty worktree (resume) | Cross-Session Resume (after plan identified) | "Uncommitted changes detected outside active plan." | WARN if plan-related changes; PAUSE if unrelated changes | User commits unrelated → re-run `continue` |
 | Tests fail (pre-existing) | Stage 0 | "⚠️ Existing tests are failing. Proceeding with caution." | WARN + continue | — |
 | Tests fail (new code) | Stage 2 verify | "Verification failed: `{cmd}` → `{output}`" | PAUSE: auto-retry 1x → ask user if still failing | Fix code → re-run Stage 2 verification |
 | Codex review timeout | Stage 1/3 poll | "Codex timed out after {N}s." | DEGRADE: use partial results if review.md exists, else skip review | Continue with warning |
-| Memsave failure | Stage 3/4 | "⚠️ Memsave failed: {error}. State NOT persisted to memory." | WARN + set `memsave_failed: true` in plan | Manual `/memsave` later |
 | Plan file missing | `/dev-cycle continue` | "Cannot find active dev-cycle plan file." | ABORT | User provides path or starts fresh |
 | Network/API error | Any stage | "API error: {details}" | PAUSE: auto-retry 1x (30s wait) → ask user | User retries or skips |
 
@@ -322,4 +313,3 @@ When `/dev-cycle continue` is invoked:
 |-------|---------|------------|
 | **Plan file** (docs/plans/dev-cycle-*.md) | Full state: stages, chunks, overrides, escalations | ✅ SSOT |
 | **TodoWrite** | Live display of current progress | ❌ Display only, rebuilt from plan |
-| **memsave** | Audit trail, cross-session memory | ❌ Audit, not runtime state |
